@@ -1,8 +1,8 @@
 // rocket instrument
 #include "BMP388_DEV.h"
-#include "Wire.h"
 #include "SdFat.h"
 #include "SparkFun_Qwiic_KX13X.h"
+#include "Wire.h"
 
 SdFat SD;
 File kxFile;
@@ -23,7 +23,7 @@ void setup() {
   digitalWrite(blinkPin_OLA, HIGH);
   delay(1000);
   digitalWrite(blinkPin_OLA, LOW);
-  
+
   Serial.begin(115200);
   Serial.println("setup");
 
@@ -128,7 +128,7 @@ void loop() {
   kxFile.println(myData.zData, 4);
   kxFile.flush();
 
-  if (counter % 2) return; // take twice as many accel samples.
+  if (counter % 10) return; // more accel samples.
 
   // ============== BAROMETER ==============
 

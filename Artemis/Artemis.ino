@@ -2,6 +2,7 @@
 #include "BMP388_DEV.h"
 #include "SdFat.h"
 #include "SparkFun_Qwiic_KX13X.h"
+#include "SPI.h"
 #include "Wire.h"
 
 SdFat SD;
@@ -13,6 +14,7 @@ BMP388_DEV bmp388;
 bool initialized = false;
 const uint8_t blinkPin_OLA = 19;
 const byte PIN_QWIIC_POWER = 18;
+const uint8_t CS_PIN = 23;
 outputData myData;
 float temperature, pressure, altitude;
 uint32_t counter = 0;
@@ -20,12 +22,19 @@ uint32_t us = 0;
 
 void setup() {
   pinMode(blinkPin_OLA, OUTPUT);
+
   digitalWrite(blinkPin_OLA, HIGH);
   delay(1000);
   digitalWrite(blinkPin_OLA, LOW);
-
+  delay(1000);
+  digitalWrite(blinkPin_OLA, HIGH);
+  delay(1000);
+  digitalWrite(blinkPin_OLA, LOW);
+  
   Serial.begin(115200);
   Serial.println("setup");
+  Serial.print("CPU speed: ");
+  Serial.println(getCpuFreqMHz());
 
   // ============== I2C ==============
 
@@ -34,22 +43,33 @@ void setup() {
   digitalWrite(PIN_QWIIC_POWER, HIGH);
   Wire.begin();
   Wire.setClock(1000000);  // fast mode plus seems to be the KX max speed
-  Wire.setPullups(1); // this is what the OLA code uses
-  delay(1000); // essential to wait for the i2c boards to power up
+  Wire.setPullups(1); // 1 is what the OLA code uses
+  delay(500); // essential to wait for the i2c boards to power up
   Serial.println("i2c done");
 
+  // ============== SPI ==============
+
+  SPI.begin();
+  pinMode(CS_PIN, OUTPUT);
+  delay(1000);
+  
   // ============== SD ==============
 
-  if (!SD.begin(23)) {
-    Serial.println("sd file fail");
-    return;
+  // SD begin fails a lot but not all the time.  why?
+  if (!SD.begin(CS_PIN)) {
+    Serial.println("sd file fail, try again");
+    delay(1000);
+    if (!SD.begin(CS_PIN)) {
+      Serial.println("sd file fail");
+      return;
+    }
   }
-  kxFile = SD.open("kx.txt", FILE_WRITE);
+  kxFile = SD.open("kx.txt", O_CREAT | O_WRITE | O_APPEND);
   if (!kxFile) {
     Serial.println("kx file fail");
     return;
   }
-  bmpFile = SD.open("bmp.txt", FILE_WRITE);
+  bmpFile = SD.open("bmp.txt", O_CREAT | O_WRITE | O_APPEND);
   if (!bmpFile) {
     Serial.println("bmp file fail");
     return;
@@ -77,7 +97,7 @@ void setup() {
     Serial.println("standby mode fail");
     return;
   }
-  if (!kxAccel.setOutputDataRate(0x0a)) { // 0x08 = 200hz, 0x0a = 800hz
+  if (!kxAccel.setOutputDataRate(0x0b)) { // 0x08=200hz, 0x0a=800hz, 0x0b=1600hz, 0x0c=3200hz
     Serial.println("ODR fail");
     return;
   }
@@ -107,17 +127,19 @@ void setup() {
 void loop() {
   if (!initialized) return;
   counter += 1;
-  if (counter > 100) {
+  if (counter > 99) {
     digitalWrite(blinkPin_OLA, HIGH);
     counter = 0;
+    kxFile.flush();
+    bmpFile.flush();
   }
-  if (counter > 50) {
+  if (counter > 49) {
     digitalWrite(blinkPin_OLA, LOW);
   }
 
   // ============== ACCELEROMETER ==============
-
-  myData = kxAccel.getAccelData();
+  // samples between 200 and 800 hz
+  myData = kxAccel.getAccelData(); // takes ~1-3ms
   us = micros();
   kxFile.print(us);
   kxFile.print("\t");
@@ -126,13 +148,12 @@ void loop() {
   kxFile.print(myData.yData, 4);
   kxFile.print("\t");
   kxFile.println(myData.zData, 4);
-  kxFile.flush();
 
-  if (counter % 10) return; // more accel samples.
+  if (counter % 5) return; // sample barometer less frequently
 
   // ============== BAROMETER ==============
-
-  if (bmp388.getMeasurements(temperature, pressure, altitude)) {
+  // samples around 80hz
+  if (bmp388.getMeasurements(temperature, pressure, altitude)) { // takes 1ms
     us = micros();
     bmpFile.print(us);
     bmpFile.print("\t");
@@ -141,7 +162,6 @@ void loop() {
     bmpFile.print(pressure, 4); // hectopascals, i.e. millibar
     bmpFile.print("\t");
     bmpFile.println(altitude, 4); // meters
-    bmpFile.flush();
-    bmp388.startForcedConversion();
+    bmp388.startForcedConversion();  // takes ~3ms!
   }
 }

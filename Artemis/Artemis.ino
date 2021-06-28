@@ -8,115 +8,85 @@ SdFat SD;
 File kxFile;
 File bmpFile;
 QwiicKX134 kxAccel;
-outputData myData;
 BMP388_DEV bmp388;
+
+bool initialized = false;
+const uint8_t blinkPin_OLA = 19;
+const byte PIN_QWIIC_POWER = 18;
+outputData myData;
 float temperature, pressure, altitude;
+uint32_t counter = 0;
+uint32_t us = 0;
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial) {}
+  pinMode(blinkPin_OLA, OUTPUT);
 
-  if (!SD.begin(23)) {
-    Serial.println("SD initialization failed!");
-    while (1);
-  }
+  // ============== SD ==============
 
+  if (!SD.begin(23)) return;
   kxFile = SD.open("kx.txt", FILE_WRITE);
-  if (!kxFile) {
-    Serial.println("error opening kx.txt");
-    while (1);
-  }
-  
+  if (!kxFile) return;
   bmpFile = SD.open("bmp.txt", FILE_WRITE);  
-  if (!bmpFile) {
-    Serial.println("error opening bmp.txt");
-    while (1);
-  }
+  if (!bmpFile) return;
+
+  // ============== I2C ==============
 
   Wire = TwoWire(1);
-  const byte PIN_QWIIC_POWER = 18;
   pinMode(PIN_QWIIC_POWER, OUTPUT);
   digitalWrite(PIN_QWIIC_POWER, HIGH);
   Wire.begin();
-  //Wire.setClock(100000);
-  //Wire.setPullups(1);
-  delay(100);
-
-  if ( !kxAccel.begin(KX13X_DEFAULT_ADDRESS, Wire) ) {
-    Serial.println("Could not communicate with the the KX134.");
-    while (1);
-  }
+  delay(100); // essential to wait for the i2c boards to power up
 
   // ============== ACCELEROMETER ==============
 
-  if ( !kxAccel.initialize(DEFAULT_SETTINGS)) { // Loading default settings.
-    Serial.println("Could not initialize the KX134.");
-    while (1);
-  }
-
-  kxAccel.setRange(KX132_RANGE16G);
-  // kxAccel.setRange(KX134_RANGE32G); // For a larger range uncomment
-
+  if (!kxAccel.begin(KX13X_DEFAULT_ADDRESS, Wire) ) return;
+  if ( !kxAccel.initialize(DEFAULT_SETTINGS)) return;
+  kxAccel.setRange(KX134_RANGE64G);
+  
   // ============== BAROMETER ==============
 
-  if (!bmp388.begin(BMP388_I2C_ALT_ADDR)) {
-    Serial.println("Could not communicate with bmp388.");
-    while(1);
-  }
+  if (!bmp388.begin(BMP388_I2C_ALT_ADDR)) return;
   bmp388.setTimeStandby(TIME_STANDBY_320MS);
   bmp388.startNormalConversion();
+  initialized = true;
 }
 
 void loop() {
+  if (!initialized) return;
+  counter += 1;
+  if (counter > 100) {
+    digitalWrite(blinkPin_OLA, HIGH);
+    counter = 0;
+  }
+  if (counter > 50) {
+    digitalWrite(blinkPin_OLA, LOW);
+  }
   // ============== ACCELEROMETER ==============
   // goes at about 200hz, will integrate to find speed.
   
   myData = kxAccel.getAccelData();
-  uint32_t us = micros();
-  Serial.print(us);
-  Serial.print(" ");
-  Serial.print("X: ");
-  Serial.print(myData.xData, 4);
-  Serial.print("g ");
-  Serial.print(" Y: ");
-  Serial.print(myData.yData, 4);
-  Serial.print("g ");
-  Serial.print(" Z: ");
-  Serial.print(myData.zData, 4);
-  Serial.println("g ");
+  us = micros();
   kxFile.print(us);
-  kxFile.print(" ");
-  kxFile.print("X: ");
-  kxFile.print(myData.xData, 4);
-  kxFile.print("g ");
-  kxFile.print(" Y: ");
-  kxFile.print(myData.yData, 4);
-  kxFile.print("g ");
-  kxFile.print(" Z: ");
-  kxFile.print(myData.zData, 4);
-  kxFile.println("g ");
+  kxFile.print("\t");
+  kxFile.print(myData.xData);
+  kxFile.print("\t");
+  kxFile.print(myData.yData);
+  kxFile.print("\t");
+  kxFile.println(myData.zData);
+  kxFile.sync();
 
   // ============== BAROMETER ==============
   // can go much more slowly, it's just looking for apogee
   
   if (bmp388.getMeasurements(temperature, pressure, altitude)) {
     us = micros();
-    Serial.print(us);
-    Serial.print(" ");
-    Serial.print(temperature);
-    Serial.print(F("*C   "));
-    Serial.print(pressure);
-    Serial.print(F("hPa   "));
-    Serial.print(altitude);
-    Serial.println(F("m"));
-
     bmpFile.print(us);
-    bmpFile.print(" ");
-    bmpFile.print(temperature);
-    bmpFile.print(F("*C   "));
-    bmpFile.print(pressure);
-    bmpFile.print(F("hPa   "));
-    bmpFile.print(altitude);
-    bmpFile.println(F("m"));
+    bmpFile.print("\t");
+    bmpFile.print(temperature); // degrees C
+    bmpFile.print("\t");
+    bmpFile.print(pressure); // hectopascals, i.e. millibar
+    bmpFile.print("\t");
+    bmpFile.println(altitude); // meters
+    bmpFile.sync();
   }
 }

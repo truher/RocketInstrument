@@ -30,7 +30,7 @@ void setup() {
   digitalWrite(blinkPin_OLA, HIGH);
   delay(1000);
   digitalWrite(blinkPin_OLA, LOW);
-  
+
   Serial.begin(115200);
   Serial.println("setup");
   Serial.print("CPU speed: ");

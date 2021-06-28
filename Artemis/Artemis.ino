@@ -27,6 +27,17 @@ void setup() {
   Serial.begin(115200);
   Serial.println("setup");
 
+  // ============== I2C ==============
+
+  Wire = TwoWire(1);
+  pinMode(PIN_QWIIC_POWER, OUTPUT);
+  digitalWrite(PIN_QWIIC_POWER, HIGH);
+  Wire.begin();
+  Wire.setClock(1000000);  // fast mode plus seems to be the KX max speed
+  Wire.setPullups(1); // this is what the OLA code uses
+  delay(1000); // essential to wait for the i2c boards to power up
+  Serial.println("i2c done");
+
   // ============== SD ==============
 
   if (!SD.begin(23)) {
@@ -44,17 +55,6 @@ void setup() {
     return;
   }
   Serial.println("sd done");
-
-  // ============== I2C ==============
-
-  Wire = TwoWire(1);
-  pinMode(PIN_QWIIC_POWER, OUTPUT);
-  digitalWrite(PIN_QWIIC_POWER, HIGH);
-  Wire.begin();
-  Wire.setClock(1000000);  // fast mode plus seems to be the KX max speed
-  Wire.setPullups(1); // this is what the OLA code uses
-  delay(1000); // essential to wait for the i2c boards to power up
-  Serial.println("i2c done");
 
   // ============== ACCELEROMETER ==============
 
@@ -77,7 +77,7 @@ void setup() {
     Serial.println("standby mode fail");
     return;
   }
-  if (!kxAccel.setOutputDataRate(0x08)) { // 200hz
+  if (!kxAccel.setOutputDataRate(0x0a)) { // 0x08 = 200hz, 0x0a = 800hz
     Serial.println("ODR fail");
     return;
   }

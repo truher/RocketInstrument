@@ -13,12 +13,6 @@ BMP388_DEV bmp388;
 
 bool initialized = false;
 const uint8_t blinkPin_OLA = 19;
-const byte PIN_QWIIC_POWER = 18;
-const uint8_t CS_PIN = 23;
-outputData myData;
-float temperature, pressure, altitude;
-uint32_t counter = 0;
-uint32_t us = 0;
 
 void setup() {
   pinMode(blinkPin_OLA, OUTPUT);
@@ -39,6 +33,7 @@ void setup() {
   // ============== I2C ==============
 
   Wire = TwoWire(1);
+  const byte PIN_QWIIC_POWER = 18;
   pinMode(PIN_QWIIC_POWER, OUTPUT);
   digitalWrite(PIN_QWIIC_POWER, HIGH);
   Wire.begin();
@@ -49,6 +44,7 @@ void setup() {
 
   // ============== SPI ==============
 
+  const uint8_t CS_PIN = 23;
   SPI.begin();
   pinMode(CS_PIN, OUTPUT);
   delay(1000);
@@ -56,20 +52,37 @@ void setup() {
   // ============== SD ==============
 
   // SD begin fails a lot but not all the time.  why?
-  if (!SD.begin(CS_PIN)) {
+  while (!SD.begin(CS_PIN)) {
     Serial.println("sd file fail, try again");
-    delay(1000);
-    if (!SD.begin(CS_PIN)) {
-      Serial.println("sd file fail");
-      return;
-    }
+    digitalWrite(blinkPin_OLA, HIGH);
+    delay(100);
+    digitalWrite(blinkPin_OLA, LOW);
+    delay(300);
+    digitalWrite(blinkPin_OLA, HIGH);
+    delay(100);
+    digitalWrite(blinkPin_OLA, LOW);
+    delay(500);
   }
-  kxFile = SD.open("kx.txt", O_CREAT | O_WRITE | O_APPEND);
+
+  int rootFileCount = 0;
+  File root;
+  if (!root.open("/")) {
+    Serial.println("root open fail");
+    return;
+  }
+  File file;
+  while (file.openNext(&root, O_RDONLY)) {
+    rootFileCount++;
+    file.close();
+  }
+  Serial.println("root file count: " + String(rootFileCount));
+
+  kxFile = SD.open("kx."+String(rootFileCount)+".txt", O_CREAT | O_WRITE | O_APPEND);
   if (!kxFile) {
     Serial.println("kx file fail");
     return;
   }
-  bmpFile = SD.open("bmp.txt", O_CREAT | O_WRITE | O_APPEND);
+  bmpFile = SD.open("bmp."+String(rootFileCount)+".txt", O_CREAT | O_WRITE | O_APPEND);
   if (!bmpFile) {
     Serial.println("bmp file fail");
     return;
@@ -124,6 +137,8 @@ void setup() {
   Serial.println("done");
 }
 
+uint32_t counter = 0;
+
 void loop() {
   if (!initialized) return;
   counter += 1;
@@ -139,8 +154,8 @@ void loop() {
 
   // ============== ACCELEROMETER ==============
   // samples between 200 and 800 hz
-  myData = kxAccel.getAccelData(); // takes ~1-3ms
-  us = micros();
+  outputData myData = kxAccel.getAccelData(); // takes ~1-3ms
+  uint32_t us = micros();
   kxFile.print(us);
   kxFile.print("\t");
   kxFile.print(myData.xData, 4);
@@ -153,6 +168,7 @@ void loop() {
 
   // ============== BAROMETER ==============
   // samples around 80hz
+  float temperature, pressure, altitude;
   if (bmp388.getMeasurements(temperature, pressure, altitude)) { // takes 1ms
     us = micros();
     bmpFile.print(us);

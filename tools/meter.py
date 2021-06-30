@@ -10,7 +10,7 @@ if len(sys.argv) < 2:
 num = sys.argv[1]
 print(f'loading file {num}.')
 
-f, ax=plt.subplots(4,1,sharex=True)
+f, ax=plt.subplots(5,1,sharex=True)
 
 df = pd.read_csv(f'kx.{num}.txt', sep='\t', names=['t','ax','ay','az'], engine='c')
 # dt in microseconds
@@ -48,5 +48,14 @@ ax[3].scatter(dfb['t']/1e6, dfb['a'], s=1)
 ax[3].set_title('pressure/temperature')
 ax[3].set_xlabel('time (s)')
 ax[3].set_ylabel('altitude (m)')
+
+dfi = pd.read_csv(f'imu.{num}.txt', sep='\t', names=['t','ax','ay','az','gx','gy','gz','mx','my','mz','T'], engine='c')
+dfi['td'] = dfi['t'].diff().fillna(0)
+
+ax[4].scatter(dfi['t']/1e6, dfi['az'], s=1)
+ax[4].set_title('imu')
+ax[4].set_xlabel('time (s)')
+ax[4].set_ylabel('accel (?)')
+
 
 plt.show()

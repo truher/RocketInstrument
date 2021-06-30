@@ -15,6 +15,12 @@ BMP388_DEV bmp388;
 ICM_20948_SPI myICM;
 
 const byte PIN_BLINK = 19;
+const byte PIN_IMU_CHIP_SELECT = 44;
+const byte PIN_IMU_POWER = 27;
+const byte PIN_MICROSD_CHIP_SELECT = 23;
+const byte PIN_MICROSD_POWER = 15;
+const byte PIN_QWIIC_POWER = 18;
+const uint32_t SPI_FREQ = 1000000;
 
 bool initialized = false;
 
@@ -33,110 +39,32 @@ void setup() {
   Serial.print("CPU speed: ");
   Serial.println(getCpuFreqMHz());
 
+  // ============== SPI ==============
+
+  SPI.begin();
+
   // ============== I2C ==============
 
   Wire = TwoWire(1);
-  const byte PIN_QWIIC_POWER = 18;
+
   pinMode(PIN_QWIIC_POWER, OUTPUT);
   digitalWrite(PIN_QWIIC_POWER, HIGH);
   Wire.begin();
-  Wire.setClock(1000000);  // fast mode plus seems to be the KX max speed
-  Wire.setPullups(1); // 1 is what the OLA code uses
-  delay(500); // essential to wait for the i2c boards to power up
+  Wire.setClock(1000000);  // Fast mode plus (1 MHz) seems to be the KX max speed.
+  Wire.setPullups(1); // 1 is what the OLA code uses.
+  delay(500); // Wait for the i2c boards to power up.
   Serial.println("i2c done");
-
-  // ============== SPI ==============
-
-  const uint8_t PIN_SD_CHIP_SELECT = 23;
-  SPI.begin();
-  pinMode(PIN_SD_CHIP_SELECT, OUTPUT);
-  digitalWrite(PIN_SD_CHIP_SELECT, HIGH); // deselect SD card
-  delay(1000);
-
-  // ============== IMU ==============
-
-  enableCIPOpullUp(); // Enable CIPO pull-up on the OLA
-
-  const byte PIN_IMU_CHIP_SELECT = 44;
-  const byte PIN_IMU_POWER = 27;
-
-  pinMode(PIN_IMU_CHIP_SELECT, OUTPUT);
-  digitalWrite(PIN_IMU_CHIP_SELECT, HIGH); //Be sure IMU is deselected
-
-  //Reset ICM by power cycling it
-  pinMode(PIN_IMU_POWER, OUTPUT);
-  digitalWrite(PIN_IMU_POWER, LOW);
-  delay(10);
-  pinMode(PIN_IMU_POWER, OUTPUT);
-  digitalWrite(PIN_IMU_POWER, HIGH);
-
-  delay(100); // Wait for the IMU to power up
-
-  bool imu_initialized = false;
-  while ( !imu_initialized ) {
-    myICM.enableDebugging();
-    myICM.begin( PIN_IMU_CHIP_SELECT, SPI, 4000000);
-
-    Serial.print( F("Initialization of the sensor returned: ") );
-    Serial.println( myICM.statusString() );
-    Serial.print("connected? ");
-    Serial.println(myICM.isConnected());
-    if ( myICM.status != ICM_20948_Stat_Ok ) {
-      Serial.println( "Trying again..." );
-      delay(500);
-    } else {
-      imu_initialized = true;
-    }
-  }
-
-  //Perform a full startup (not minimal) for non-DMP mode
-  ICM_20948_Status_e retval = myICM.startupDefault(false);
-  if (retval != ICM_20948_Stat_Ok)
-  {
-    Serial.println(F("Error: Could not startup the IMU in non-DMP mode!"));
-    return;
-  }
-  //Update the full scale and DLPF settings
-  retval = myICM.enableDLPF(ICM_20948_Internal_Acc, false);
-  if (retval != ICM_20948_Stat_Ok)
-  {
-    Serial.println(F("Error: Could not configure the IMU Accelerometer DLPF!"));
-    return;
-  }
-  retval = myICM.enableDLPF(ICM_20948_Internal_Gyr, false);
-  if (retval != ICM_20948_Stat_Ok)
-  {
-    Serial.println(F("Error: Could not configure the IMU Gyro DLPF!"));
-    return;
-  }
-  ICM_20948_dlpcfg_t dlpcfg;
-  dlpcfg.a = 7;
-  dlpcfg.g = 7;
-  retval = myICM.setDLPFcfg((ICM_20948_Internal_Acc | ICM_20948_Internal_Gyr), dlpcfg);
-  if (retval != ICM_20948_Stat_Ok)
-  {
-    Serial.println(F("Error: Could not configure the IMU DLPF BW!"));
-    return;
-  }
-  ICM_20948_fss_t FSS;
-  FSS.a = 0;
-  FSS.g = 0;
-  retval = myICM.setFullScale((ICM_20948_Internal_Acc | ICM_20948_Internal_Gyr), FSS);
-  if (retval != ICM_20948_Stat_Ok)
-  {
-    Serial.println(F("Error: Could not configure the IMU Full Scale!"));
-    return;
-  }
-
-
-
-
 
   // ============== SD ==============
 
-  // SD begin fails a lot but not all the time.  why?
-//  while (!SD.begin(PIN_SD_CHIP_SELECT)) {
-  while (!SD.begin(SdSpiConfig(PIN_SD_CHIP_SELECT, SHARED_SPI, SD_SCK_MHZ(24)))) {
+  pinMode(PIN_MICROSD_CHIP_SELECT, OUTPUT);
+  digitalWrite(PIN_MICROSD_CHIP_SELECT, HIGH); // Deselect SD.
+
+  pinMode(PIN_MICROSD_POWER, OUTPUT);
+  digitalWrite(PIN_MICROSD_POWER, LOW); // Turn SD on.
+  delay(1000);  // Wait for SD to power up, this takes awhile.
+
+  while (!SD.begin(SdSpiConfig(PIN_MICROSD_CHIP_SELECT, SHARED_SPI, SD_SCK_MHZ(24)))) {
     Serial.println("sd file fail, try again");
     digitalWrite(PIN_BLINK, HIGH);
     delay(100);
@@ -145,7 +73,23 @@ void setup() {
     digitalWrite(PIN_BLINK, HIGH);
     delay(100);
     digitalWrite(PIN_BLINK, LOW);
-    delay(500);
+    delay(1000);
+  }
+  Serial.println("SD init ok");
+
+  // Adds SPI CIPO pull-up because without peripheral action it floats.
+  // Must happen after SD.begin() (why?)
+  am_hal_gpio_pincfg_t cipoPinCfg = AP3_GPIO_DEFAULT_PINCFG;
+  cipoPinCfg.uFuncSel = AM_HAL_PIN_6_M0MISO;
+  cipoPinCfg.eDriveStrength = AM_HAL_GPIO_PIN_DRIVESTRENGTH_12MA;
+  cipoPinCfg.eGPOutcfg = AM_HAL_GPIO_PIN_OUTCFG_PUSHPULL;
+  cipoPinCfg.uIOMnum = AP3_SPI_IOM;
+  cipoPinCfg.ePullup = AM_HAL_GPIO_PIN_PULLUP_1_5K;
+  ap3_err_t retval2 = AP3_OK;
+  padMode(MISO, cipoPinCfg, &retval2);
+  if (retval2 != AP3_OK) {
+    Serial.println("MISO pullup fail");
+    return;
   }
 
   int rootFileCount = 0;
@@ -156,23 +100,76 @@ void setup() {
   }
   File file;
   while (file.openNext(&root, O_RDONLY)) {
+    file.printName(&Serial);
+    Serial.println();
     rootFileCount++;
     file.close();
   }
   Serial.println("root file count: " + String(rootFileCount));
-  const char* kxfilename = ("kx." + String(rootFileCount) + ".txt").c_str();
-  Serial.println("open " + String(kxfilename));
-  if (!kxFile.open(kxfilename, O_CREAT | O_WRITE | O_APPEND)) {
+  String kxfilename = "kx." + String(rootFileCount) + ".txt";
+  Serial.println("open " + kxfilename);
+  if (!kxFile.open(kxfilename.c_str(), O_CREAT | O_WRITE | O_APPEND)) {
     Serial.println("kx file fail");
     return;
   }
-  const char* bmpfilename = ("bmp." + String(rootFileCount) + ".txt").c_str();
-  Serial.println("open " + String(bmpfilename));
-  if (!bmpFile.open(bmpfilename, O_CREAT | O_WRITE | O_APPEND)) {
+  String bmpfilename = "bmp." + String(rootFileCount) + ".txt";
+  Serial.println("open " + bmpfilename);
+  if (!bmpFile.open(bmpfilename.c_str(), O_CREAT | O_WRITE | O_APPEND)) {
     Serial.println("bmp file fail");
     return;
   }
+  String imufilename = "imu." + String(rootFileCount) + ".txt";
+  Serial.println("open " + imufilename);
+  if (!imuFile.open(imufilename.c_str(), O_CREAT | O_WRITE | O_APPEND)) {
+    Serial.println("imu file fail");
+    return;
+  }
   Serial.println("sd done");
+
+  digitalWrite(PIN_MICROSD_CHIP_SELECT, HIGH); // Deselect SD.
+
+  // ============== IMU ==============
+
+  pinMode(PIN_IMU_CHIP_SELECT, OUTPUT);
+  digitalWrite(PIN_IMU_CHIP_SELECT, HIGH); // Deselect IMU
+
+  pinMode(PIN_IMU_POWER, OUTPUT);
+  digitalWrite(PIN_IMU_POWER, HIGH); // Turn IMU on.
+  delay(100); // Wait for IMU to power up.
+
+  myICM.enableDebugging();
+  myICM.begin(PIN_IMU_CHIP_SELECT, SPI, SPI_FREQ);
+  if (myICM.status != ICM_20948_Stat_Ok) {
+    Serial.println("beginIMU: first attempt at myICM.begin failed. myICM.status = " + (String)myICM.status + "\r\n");
+
+    //Reset IMU by power cycling it
+    digitalWrite(PIN_IMU_POWER, LOW); // Turn IMU off.
+    delay(10);
+    digitalWrite(PIN_IMU_POWER, HIGH); // Turn IMU on.
+    delay(100); // Wait for IMU to power up.
+
+    // begin() defaults include:
+    // DLPF (low pass filter) disabled (but configured, which is weird)
+    // no sleeping, no lowpower, continuous mode, max speed, max resolution (min range)
+    myICM.begin(PIN_IMU_CHIP_SELECT, SPI, SPI_FREQ);
+    if (myICM.status != ICM_20948_Stat_Ok) {
+      Serial.println("beginIMU: second attempt at myICM.begin failed. myICM.status = " + (String)myICM.status + "\r\n");
+      digitalWrite(PIN_IMU_CHIP_SELECT, HIGH); // Deselect IMU.
+      Serial.println(F("ICM-20948 failed to init."));
+      digitalWrite(PIN_IMU_POWER, LOW); // Turn IMU off.
+      return;
+    }
+  }
+
+  // Set max range.
+  ICM_20948_fss_t FSS;
+  FSS.a = 3; // +-16g
+  FSS.g = 3; // +-2000dps
+  ICM_20948_Status_e retval = myICM.setFullScale((ICM_20948_Internal_Acc | ICM_20948_Internal_Gyr), FSS);
+  if (retval != ICM_20948_Stat_Ok) {
+    Serial.println("Error: Could not configure the IMU Full Scale!");
+    return;
+  }
 
   // ============== ACCELEROMETER ==============
 
@@ -188,14 +185,13 @@ void setup() {
     Serial.println("kx range fail");
     return;
   }
-
   KX13X_STATUS_t returnError;
   returnError = kxAccel.writeRegister(KX13X_CNTL1, 0x7f, 0, 7); // standby mode for this change
   if ( returnError != KX13X_SUCCESS ) {
     Serial.println("standby mode fail");
     return;
   }
-  if (!kxAccel.setOutputDataRate(0x0b)) { // 0x08=200hz, 0x0a=800hz, 0x0b=1600hz, 0x0c=3200hz
+  if (!kxAccel.setOutputDataRate(0x0b)) { // 0x0b=1600hz, seems like the effective maximum?
     Serial.println("ODR fail");
     return;
   }
@@ -209,7 +205,6 @@ void setup() {
     Serial.println("normal mode fail");
     return;
   }
-
   Serial.println("kx done");
 
   // ============== BAROMETER ==============
@@ -217,9 +212,11 @@ void setup() {
   if (!bmp388.begin(BMP388_I2C_ALT_ADDR)) return;
   bmp388.setTempOversampling(OVERSAMPLING_SKIP);
   bmp388.setPresOversampling(OVERSAMPLING_SKIP);
-  bmp388.startForcedConversion();
+  bmp388.setIIRFilter(IIR_FILTER_OFF);
+  bmp388.setTimeStandby(TIME_STANDBY_5MS); // ~continuous
+  bmp388.startNormalConversion();
   initialized = true;
-  Serial.println("done");
+  Serial.println("setup done");
 }
 
 uint32_t counter = 0;
@@ -232,113 +229,83 @@ void loop() {
     counter = 0;
     kxFile.flush();
     bmpFile.flush();
+    imuFile.flush();
   }
   if (counter > 49) {
     digitalWrite(PIN_BLINK, LOW);
   }
 
-  // ============== ACCELEROMETER ==============
-  // samples between 200 and 800 hz
-  outputData myData = kxAccel.getAccelData(); // takes ~1-3ms
-  uint32_t us = micros();
-  kxFile.print(us);
-  kxFile.print("\t");
-  kxFile.print(myData.xData, 4);
-  kxFile.print("\t");
-  kxFile.print(myData.yData, 4);
-  kxFile.print("\t");
-  kxFile.println(myData.zData, 4);
+  if (counter % 20 == 0) {
+    recordBMP();
+    return;
+  }
+  if (counter % 5 == 0) {
+    recordIMU();
+    return;
+  }
+  recordKX();
+}
 
+// first is about 3.5ms, subsequent about 1.2ms.
+void recordKX() {
+  rawOutputData rawAccelData;
+  outputData myData;
+  if (kxAccel.getRawAccelData(&rawAccelData) && kxAccel.convAccelData(&myData, &rawAccelData)) {
+    kxFile.print(micros());
+    kxFile.print("\t");
+    kxFile.print(myData.xData, 4);
+    kxFile.print("\t");
+    kxFile.print(myData.yData, 4);
+    kxFile.print("\t");
+    kxFile.println(myData.zData, 4);
+  }
+}
 
-  // ============== IMU ==============
-
-  Serial.println(myICM.getWhoAmI());
-  if ( myICM.dataReady() ) {
+//first is about 5.5ms, subsequent about 3ms
+void recordIMU() {
+  if (myICM.dataReady()) {
     myICM.getAGMT();
-    printScaledAGMT( myICM.agmt);
-  } //else {
-   // Serial.println("no IMU data");
-  //}
+    if (myICM.status == ICM_20948_Stat_Ok) {
+      imuFile.print(micros());
+      imuFile.print("\t");
+      imuFile.print( myICM.accX(), 4); // mg
+      imuFile.print("\t");
+      imuFile.print( myICM.accY(), 4); // mg
+      imuFile.print("\t");
+      imuFile.print( myICM.accZ(), 4); // mg
+      imuFile.print("\t");
+      imuFile.print( myICM.gyrX(), 4); // deg/s
+      imuFile.print("\t");
+      imuFile.print( myICM.gyrY(), 4); // deg/s
+      imuFile.print("\t");
+      imuFile.print( myICM.gyrZ(), 4); // deg/s
+      imuFile.print("\t");
+      imuFile.print( myICM.magX(), 4); // uT
+      imuFile.print("\t");
+      imuFile.print( myICM.magY(), 4); // uT
+      imuFile.print("\t");
+      imuFile.print( myICM.magZ(), 4); // uT
+      imuFile.print("\t");
+      imuFile.print( myICM.temp(), 4); // deg C
+      imuFile.println();
+    }
+  }
+}
 
-  // ============== BAROMETER ==============
-  if (counter % 5) return; // sample barometer less frequently, ~80hz
+// in forced mode, first is about 8ms, subsequent about 6ms
+// in normal mode, the first one comes sooner since it's running all the time,
+// and the rest are in 5ms which is the standby time.
+// datasheet says 234us + 392us + 2000us + 313us + 2000us = just about 5ms.
+void recordBMP() {
   float temperature, pressure, altitude;
-  if (bmp388.getMeasurements(temperature, pressure, altitude)) { // takes 1ms
-    us = micros();
-    bmpFile.print(us);
-    bmpFile.print("\t");
-    bmpFile.print(temperature, 4); // degrees C
-    bmpFile.print("\t");
-    bmpFile.print(pressure, 4); // hectopascals, i.e. millibar
-    bmpFile.print("\t");
-    bmpFile.println(altitude, 4); // meters
-    bmp388.startForcedConversion();  // takes ~3ms!
+  while (!bmp388.getMeasurements(temperature, pressure, altitude)) {
+    // do nothing, it's ok to wait
   }
-}
-
-void printFormattedFloat(float val, uint8_t leading, uint8_t decimals) {
-  float aval = abs(val);
-  if (val < 0) {
-    Serial.print("-");
-  } else {
-    Serial.print(" ");
-  }
-  for ( uint8_t indi = 0; indi < leading; indi++ ) {
-    uint32_t tenpow = 0;
-    if ( indi < (leading - 1) ) {
-      tenpow = 1;
-    }
-    for (uint8_t c = 0; c < (leading - 1 - indi); c++) {
-      tenpow *= 10;
-    }
-    if ( aval < tenpow) {
-      Serial.print("0");
-    } else {
-      break;
-    }
-  }
-  if (val < 0) {
-    Serial.print(-val, decimals);
-  } else {
-    Serial.print(val, decimals);
-  }
-}
-
-void printScaledAGMT( ICM_20948_AGMT_t agmt) {
-  Serial.print("Scaled. Acc (mg) [ ");
-  printFormattedFloat( myICM.accX(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.accY(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.accZ(), 5, 2 );
-  Serial.print(" ], Gyr (DPS) [ ");
-  printFormattedFloat( myICM.gyrX(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.gyrY(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.gyrZ(), 5, 2 );
-  Serial.print(" ], Mag (uT) [ ");
-  printFormattedFloat( myICM.magX(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.magY(), 5, 2 );
-  Serial.print(", ");
-  printFormattedFloat( myICM.magZ(), 5, 2 );
-  Serial.print(" ], Tmp (C) [ ");
-  printFormattedFloat( myICM.temp(), 5, 2 );
-  Serial.print(" ]");
-  Serial.println();
-}
-
-bool enableCIPOpullUp()
-{
-  //Add CIPO pull-up
-  ap3_err_t retval = AP3_OK;
-  am_hal_gpio_pincfg_t cipoPinCfg = AP3_GPIO_DEFAULT_PINCFG;
-  cipoPinCfg.uFuncSel = AM_HAL_PIN_6_M0MISO;
-  cipoPinCfg.eDriveStrength = AM_HAL_GPIO_PIN_DRIVESTRENGTH_12MA;
-  cipoPinCfg.eGPOutcfg = AM_HAL_GPIO_PIN_OUTCFG_PUSHPULL;
-  cipoPinCfg.uIOMnum = AP3_SPI_IOM;
-  cipoPinCfg.ePullup = AM_HAL_GPIO_PIN_PULLUP_1_5K;
-  padMode(MISO, cipoPinCfg, &retval);
-  return (retval == AP3_OK);
+  bmpFile.print(micros());
+  bmpFile.print("\t");
+  bmpFile.print(temperature, 4); // degrees C
+  bmpFile.print("\t");
+  bmpFile.print(pressure, 4); // hectopascals, i.e. millibar
+  bmpFile.print("\t");
+  bmpFile.println(altitude, 4); // meters
 }
